@@ -71,6 +71,7 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
 
 
   for i in range(0,len(reader.color_files),args.stride):
+    print("N images: " + str(len(reader.color_files)))
     color_file = reader.color_files[i]
     color = cv2.imread(color_file)
     H0, W0 = color.shape[:2]
@@ -83,11 +84,8 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
       mask = reader.get_mask(0)
       mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
       if use_segmenter:
-        mask = segmenter.run(color_file.replace('rgb','masks'))
+        segmenter.run()
     else:
-      if use_segmenter:
-        mask = segmenter.run(color_file.replace('rgb','masks'))
-      else:
         mask = reader.get_mask(i)
         mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
 
@@ -211,9 +209,9 @@ def draw_pose():
 if __name__=="__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument('--mode', type=str, default="run_video", help="run_video/global_refine/draw_pose")
-  parser.add_argument('--video_dir', type=str, default="/home/bruno/Desktop/Darko/BundleSDF/video")
-  parser.add_argument('--out_folder', type=str, default="/home/bruno/Desktop/Darko/BundleSDF/result")
-  parser.add_argument('--use_segmenter', type=int, default=False)
+  parser.add_argument('--video_dir', type=str, default="/home/bruno/Desktop/BundleSDF/data")
+  parser.add_argument('--out_folder', type=str, default="/home/bruno/Desktop/BundleSDF/result")
+  parser.add_argument('--use_segmenter', type=int, default=True)
   parser.add_argument('--use_gui', type=int, default=True)
   parser.add_argument('--stride', type=int, default=1, help='interval of frames to run; 1 means using every frame')
   parser.add_argument('--debug_level', type=int, default=2, help='higher means more logging')

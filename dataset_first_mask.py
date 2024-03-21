@@ -40,7 +40,7 @@ def plot_images(image1, image2, title1='Image 1', title2='Image 2'):
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(DEVICE)
 MODEL_TYPE = "vit_h"
-checkpoint_path = "/home/bruno/Desktop/Darko/BundleSDF/segmentation/sam_vit_h_4b8939.pth"
+checkpoint_path = "/home/bruno/Desktop/BundleSDF/segmentation/sam_vit_h_4b8939.pth"
 sam = sam_model_registry[MODEL_TYPE](checkpoint=checkpoint_path)
 # We force the use of cpu due to NN size > 6gb
 DEVICE = 'cpu'
@@ -49,8 +49,8 @@ sam.to(device=DEVICE)
 
 mask_predictor = SamPredictor(sam, )
 
-image_path = "/home/bruno/Desktop/Darko/BundleSDF/video/rgb/0000.png"
-mask_path = "/home/bruno/Desktop/Darko/BundleSDF/video/masks/0000.png"
+image_path = "/home/bruno/Desktop/BundleSDF/data/rgb/0000.png"
+mask_path = "/home/bruno/Desktop/BundleSDF/data/masks/0000.png"
 image_bgr = cv2.imread(image_path)
 image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 

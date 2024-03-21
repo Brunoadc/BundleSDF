@@ -9,10 +9,20 @@
 import cv2
 import os
 import numpy as np
+import sys
+
+# append a new directory to sys.path
+sys.path.append('/home/bruno/Desktop/BundleSDF/XMem2')
+
+from inference.run_on_video import run_on_video
 
 class Segmenter():
-    def __int__(self):
+    def __init__(self):
+        self.imgs_path = '/home/bruno/Desktop/BundleSDF/data/rgb'
+        self.masks_path = '/home/bruno/Desktop/BundleSDF/data/masks'   # Should contain annotation masks for frames in `frames_with_masks`
+        self.output_path = '/home/bruno/Desktop/BundleSDF/data'
         return
 
     def run(self, mask_file=None):
-        return (cv2.imread(mask_file, -1)>0).astype(np.uint8)
+        frames_with_masks = [0]  # indices of frames for which there is an annotation mask
+        run_on_video(self.imgs_path, self.masks_path, self.output_path, frames_with_masks)
