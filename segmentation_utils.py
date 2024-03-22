@@ -12,15 +12,15 @@ import numpy as np
 import sys
 
 # append a new directory to sys.path
-sys.path.append('/home/bruno/Desktop/BundleSDF/XMem2')
+sys.path.append('/home/agostinh/Desktop/BundleSDF/XMem2')
 
 from inference.run_on_video import run_on_video
 
 class Segmenter():
     def __init__(self):
-        self.imgs_path = '/home/bruno/Desktop/BundleSDF/data/rgb'
-        self.masks_path = '/home/bruno/Desktop/BundleSDF/data/masks'   # Should contain annotation masks for frames in `frames_with_masks`
-        self.output_path = '/home/bruno/Desktop/BundleSDF/data'
+        self.imgs_path = '/home/agostinh/Desktop/BundleSDF/data/rgb'
+        self.masks_path = '/home/agostinh/Desktop/BundleSDF/data/masks'   # Should contain annotation masks for frames in `frames_with_masks`
+        self.output_path = '/home/agostinh/Desktop/BundleSDF/data'
         return
 
     def run(self, mask_file=None):

@@ -13,6 +13,9 @@ import os,sys
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_dir)
 from segmentation_utils import Segmenter
+from scipy.spatial.transform import Rotation as R
+from scipy.signal import butter, filtfilt
+from scipy.interpolate import CubicSpline
 
 
 def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False):
@@ -80,11 +83,13 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
     color = cv2.resize(color, (W,H), interpolation=cv2.INTER_NEAREST)
     depth = cv2.resize(depth, (W,H), interpolation=cv2.INTER_NEAREST)
 
+    print(i)
     if i==0:
       mask = reader.get_mask(0)
       mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
       if use_segmenter:
         segmenter.run()
+        print("Run segmenter")
     else:
         mask = reader.get_mask(i)
         mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
@@ -185,7 +190,26 @@ def postprocess_mesh(out_folder):
   mesh = trimesh.smoothing.filter_laplacian(mesh,lamb=0.5, iterations=3, implicit_time_integration=False, volume_constraint=True, laplacian_operator=None)
   mesh.export(f'{out_folder}/mesh/mesh_biggest_component_smoothed.obj')
 
+def butter_lowpass_filter(data, cutoff, fs, order=5):
+    """
+    Apply a lowpass Butterworth filter to the input data.
 
+    Args:
+        data (np.ndarray): The input signal to filter.
+        cutoff (float): The desired cutoff frequency in Hz.
+        fs (float): The sampling rate of the input signal in Hz.
+        order (int): The order of the Butterworth filter.
+
+    Returns:
+        np.ndarray: The filtered signal.
+    """
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    # Get the filter coefficients
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    # Apply the filter
+    filtered_data = filtfilt(b, a, data)
+    return filtered_data
 
 def draw_pose():
   K = np.loadtxt(f'{args.out_folder}/cam_K.txt').reshape(3,3)
@@ -196,22 +220,106 @@ def draw_pose():
   out_dir = f'{args.out_folder}/pose_vis'
   os.makedirs(out_dir, exist_ok=True)
   logging.info(f"Saving to {out_dir}")
-  for color_file in color_files:
-    color = imageio.imread(color_file)
-    pose = np.loadtxt(color_file.replace('.png','.txt').replace('color','ob_in_cam'))
-    pose = pose@np.linalg.inv(to_origin)
-    vis = draw_posed_3d_box(K, color, ob_in_cam=pose, bbox=bbox, line_color=(255,255,0))
-    id_str = os.path.basename(color_file).replace('.png','')
-    imageio.imwrite(f'{out_dir}/{id_str}.png', vis)
 
+  positions = []
+  eulers = []
+  for color_file in color_files:
+      color = imageio.imread(color_file)
+      pose = np.loadtxt(color_file.replace('.png','.txt').replace('color','ob_in_cam'))
+      pose = pose@np.linalg.inv(to_origin)
+      positions.append(pose[:3, 3])  # Assuming the last column is the translation vectorcolor = imageio.imread(color_file)
+      rotation = R.from_matrix(pose[:3, :3])
+      eulers.append(rotation.as_euler('xyz', degrees=True))
+      vis = draw_posed_3d_box(K, color, ob_in_cam=pose, bbox=bbox, line_color=(255,255,0))
+      id_str = os.path.basename(color_file).replace('.png','')
+      imageio.imwrite(f'{out_dir}/{id_str}.png', vis)
+
+  fs = 30.0  # Sample rate, Hz
+  cutoff = 6.0  # Desired cutoff frequency of the filter, Hz
+  order = 6  # Filter order
+
+  # Filter the position data
+  positions = np.array(positions)
+  eulers = np.array(eulers)
+  times = np.arange(0, len(positions) * 1/fs, 1/fs)
+  filtered_positions = np.zeros_like(positions)
+  for i in range(positions.shape[1]):
+      filtered_positions[:, i] = butter_lowpass_filter(positions[:, i], cutoff, fs, order)
+
+  # Filter the Euler angle data
+  eulers = np.unwrap(eulers, 180, axis=0)
+  filtered_eulers = np.zeros_like(eulers)
+  for i in range(eulers.shape[1]):
+      filtered_eulers[:, i] = butter_lowpass_filter(eulers[:, i], cutoff, fs, order)
+
+
+  # Compute derivatives
+  print(filtered_positions[:,0])
+  cs_positions_x = CubicSpline(times, filtered_positions[:,0])
+  cs_positions_y = CubicSpline(times, filtered_positions[:,1])
+  cs_positions_z = CubicSpline(times, filtered_positions[:,2])
+  cs_eulers_x = CubicSpline(times, filtered_eulers[:,0])
+  cs_eulers_y = CubicSpline(times, filtered_eulers[:,1])
+  cs_eulers_z = CubicSpline(times, filtered_eulers[:,2])
+
+
+  velocities_x = cs_positions_x(times, 1)
+  velocities_y = cs_positions_y(times, 1)
+  velocities_z = cs_positions_z(times, 1)
+  angular_velocities_x = cs_eulers_x(times, 1)
+  angular_velocities_y = cs_eulers_y(times, 1)
+  angular_velocities_z = cs_eulers_z(times, 1)
+
+  # After processing all images, plot position and velocity over time
+  fig, axs = plt.subplots(4, 1, figsize=(10, 16))
+  
+  # Plot positions
+  print("Start plotting")
+  axs[0].plot(times, filtered_positions[:, 0], label='X Position')
+  axs[0].plot(times, filtered_positions[:, 1], label='Y Position')
+  axs[0].plot(times, filtered_positions[:, 2], label='Z Position')
+  axs[0].set_xlabel('Time')
+  axs[0].set_ylabel('Position')
+  axs[0].legend()
+  axs[0].set_title('Position Over Time')
+  
+  # Plot velocity magnitudes
+  axs[1].plot(times, velocities_x, label='X Velocity')
+  axs[1].plot(times, velocities_y, label='Y Velocity')
+  axs[1].plot(times, velocities_z, label='Z Velocity')
+  axs[1].set_xlabel('Time')
+  axs[1].set_ylabel('Velocity')
+  axs[1].legend()
+  axs[1].set_title('Velocity Over Time')
+
+  # Plot Euler angles
+  axs[2].plot(times, filtered_eulers[:, 0], label='Roll')
+  axs[2].plot(times, filtered_eulers[:, 1], label='Pitch')
+  axs[2].plot(times, filtered_eulers[:, 2], label='Yaw')
+  axs[2].set_xlabel('Time')
+  axs[2].set_ylabel('Angle (degrees)')
+  axs[2].legend()
+  axs[2].set_title('Euler Angles Over Time')
+
+  # Plot angular velocities
+  axs[3].plot(times, angular_velocities_x, label='Roll Velocity')
+  axs[3].plot(times, angular_velocities_y, label='Pitch Velocity')
+  axs[3].plot(times, angular_velocities_z, label='Yaw Velocity')
+  axs[3].set_xlabel('Time')
+  axs[3].set_ylabel('Angular Velocity (degrees/time)')
+  axs[3].legend()
+  axs[3].set_title('Angular Velocity Over Time')
+
+  plt.tight_layout()
+  plt.show()
 
 
 if __name__=="__main__":
   parser = argparse.ArgumentParser()
-  parser.add_argument('--mode', type=str, default="run_video", help="run_video/global_refine/draw_pose")
-  parser.add_argument('--video_dir', type=str, default="/home/bruno/Desktop/BundleSDF/data")
-  parser.add_argument('--out_folder', type=str, default="/home/bruno/Desktop/BundleSDF/result")
-  parser.add_argument('--use_segmenter', type=int, default=True)
+  parser.add_argument('--mode', type=str, default="draw_pose", help="run_video/global_refine/draw_pose")
+  parser.add_argument('--video_dir', type=str, default="/home/agostinh/Desktop/BundleSDF/data")
+  parser.add_argument('--out_folder', type=str, default="/home/agostinh/Desktop/BundleSDF/result")
+  parser.add_argument('--use_segmenter', type=int, default=False)
   parser.add_argument('--use_gui', type=int, default=True)
   parser.add_argument('--stride', type=int, default=1, help='interval of frames to run; 1 means using every frame')
   parser.add_argument('--debug_level', type=int, default=2, help='higher means more logging')
