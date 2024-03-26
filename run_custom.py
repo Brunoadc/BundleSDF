@@ -10,6 +10,7 @@
 from bundlesdf import *
 import argparse
 import os,sys
+import pandas as pd
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_dir)
 from segmentation_utils import Segmenter
@@ -190,128 +191,216 @@ def postprocess_mesh(out_folder):
   mesh = trimesh.smoothing.filter_laplacian(mesh,lamb=0.5, iterations=3, implicit_time_integration=False, volume_constraint=True, laplacian_operator=None)
   mesh.export(f'{out_folder}/mesh/mesh_biggest_component_smoothed.obj')
 
-def butter_lowpass_filter(data, cutoff, fs, order=5):
-    """
-    Apply a lowpass Butterworth filter to the input data.
+def draw_pose(optitrack_tracking= False, cv_tracking = False):
+  if optitrack_tracking:
+    # OPTITRACK TRACKING
+    # Read the CSV file into a DataFrame
+    df = pd.read_csv(f'{args.video_dir}/pose.csv')
 
-    Args:
-        data (np.ndarray): The input signal to filter.
-        cutoff (float): The desired cutoff frequency in Hz.
-        fs (float): The sampling rate of the input signal in Hz.
-        order (int): The order of the Butterworth filter.
+    # Convert the DataFrame to a NumPy array
+    data_array = df.to_numpy()
+    
+    # timestamp, pose.position.x, pose.position.y, pose.position.z, pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
+    times_opti = [] 
+    positions_opti = []
+    eulers_opti = []
+    
+    for i in range(data_array.shape[0]):
+      quat = [data_array[i,4], data_array[i,5], data_array[i,6], data_array[i,7]]
+      rotation = R.from_quat(quat)
+    
+      times_opti.append(data_array[i,0])
+      positions_opti.append([data_array[i,1], data_array[i,2], data_array[i,3]])
+      eulers_opti.append(rotation.as_euler('xyz', degrees=True))
 
-    Returns:
-        np.ndarray: The filtered signal.
-    """
-    nyquist = 0.5 * fs
-    normal_cutoff = cutoff / nyquist
-    # Get the filter coefficients
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
-    # Apply the filter
-    filtered_data = filtfilt(b, a, data)
-    return filtered_data
+    dt = (times_opti[-1]-times_opti[0]) * 10e-10 / len(times_opti)
+    fs_opti = int(1/dt)  # Sample rate, Hz
+    cutoff = 25.0  # Desired cutoff frequency of the filter, Hz
+    order = 6  # Filter order
+    b_opti, a_opti = butter(order, cutoff, btype='low', analog=False, fs=fs_opti)
 
-def draw_pose():
-  K = np.loadtxt(f'{args.out_folder}/cam_K.txt').reshape(3,3)
-  color_files = sorted(glob.glob(f'{args.out_folder}/color/*'))
-  mesh = trimesh.load(f'{args.out_folder}/textured_mesh.obj')
-  to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
-  bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
-  out_dir = f'{args.out_folder}/pose_vis'
-  os.makedirs(out_dir, exist_ok=True)
-  logging.info(f"Saving to {out_dir}")
-
-  positions = []
-  eulers = []
-  for color_file in color_files:
-      color = imageio.imread(color_file)
-      pose = np.loadtxt(color_file.replace('.png','.txt').replace('color','ob_in_cam'))
-      pose = pose@np.linalg.inv(to_origin)
-      positions.append(pose[:3, 3])  # Assuming the last column is the translation vectorcolor = imageio.imread(color_file)
-      rotation = R.from_matrix(pose[:3, :3])
-      eulers.append(rotation.as_euler('xyz', degrees=True))
-      vis = draw_posed_3d_box(K, color, ob_in_cam=pose, bbox=bbox, line_color=(255,255,0))
-      id_str = os.path.basename(color_file).replace('.png','')
-      imageio.imwrite(f'{out_dir}/{id_str}.png', vis)
-
-  fs = 30.0  # Sample rate, Hz
-  cutoff = 6.0  # Desired cutoff frequency of the filter, Hz
-  order = 6  # Filter order
-
-  # Filter the position data
-  positions = np.array(positions)
-  eulers = np.array(eulers)
-  times = np.arange(0, len(positions) * 1/fs, 1/fs)
-  filtered_positions = np.zeros_like(positions)
-  for i in range(positions.shape[1]):
-      filtered_positions[:, i] = butter_lowpass_filter(positions[:, i], cutoff, fs, order)
-
-  # Filter the Euler angle data
-  eulers = np.unwrap(eulers, 180, axis=0)
-  filtered_eulers = np.zeros_like(eulers)
-  for i in range(eulers.shape[1]):
-      filtered_eulers[:, i] = butter_lowpass_filter(eulers[:, i], cutoff, fs, order)
+    # Filter the position data
+    times_opti = np.array(times_opti) * 10e-10
+    times_opti -= np.min(times_opti)
+    positions_opti = np.array(positions_opti)
+    eulers_opti = np.array(eulers_opti)
+    filtered_positions_opti = np.zeros_like(positions_opti)
+    for i in range(positions_opti.shape[1]):
+        filtered_positions_opti[:, i] = filtfilt(b_opti, a_opti, positions_opti[:, i])
 
 
-  # Compute derivatives
-  print(filtered_positions[:,0])
-  cs_positions_x = CubicSpline(times, filtered_positions[:,0])
-  cs_positions_y = CubicSpline(times, filtered_positions[:,1])
-  cs_positions_z = CubicSpline(times, filtered_positions[:,2])
-  cs_eulers_x = CubicSpline(times, filtered_eulers[:,0])
-  cs_eulers_y = CubicSpline(times, filtered_eulers[:,1])
-  cs_eulers_z = CubicSpline(times, filtered_eulers[:,2])
+    # Filter the Euler angle data
+    eulers_opti = np.unwrap(eulers_opti, 180, axis=0)
+    filtered_eulers_opti = np.zeros_like(eulers_opti)
+    for i in range(eulers_opti.shape[1]):
+        filtered_eulers_opti[:, i] = filtfilt(b_opti, a_opti, eulers_opti[:, i])
+
+    # Compute derivatives
+    cs_positions_x_opti = CubicSpline(times_opti, filtered_positions_opti[:,0])
+    cs_positions_y_opti = CubicSpline(times_opti, filtered_positions_opti[:,1])
+    cs_positions_z_opti = CubicSpline(times_opti, filtered_positions_opti[:,2])
+    cs_eulers_x_opti = CubicSpline(times_opti, filtered_eulers_opti[:,0])
+    cs_eulers_y_opti = CubicSpline(times_opti, filtered_eulers_opti[:,1])
+    cs_eulers_z_opti = CubicSpline(times_opti, filtered_eulers_opti[:,2])
 
 
-  velocities_x = cs_positions_x(times, 1)
-  velocities_y = cs_positions_y(times, 1)
-  velocities_z = cs_positions_z(times, 1)
-  angular_velocities_x = cs_eulers_x(times, 1)
-  angular_velocities_y = cs_eulers_y(times, 1)
-  angular_velocities_z = cs_eulers_z(times, 1)
+    velocities_x_opti = cs_positions_x_opti(times_opti, 1)
+    velocities_y_opti = cs_positions_y_opti(times_opti, 1)
+    velocities_z_opti = cs_positions_z_opti(times_opti, 1)
+    angular_velocities_x_opti = cs_eulers_x_opti(times_opti, 1)
+    angular_velocities_y_opti = cs_eulers_y_opti(times_opti, 1)
+    angular_velocities_z_opti = cs_eulers_z_opti(times_opti, 1)
 
-  # After processing all images, plot position and velocity over time
-  fig, axs = plt.subplots(4, 1, figsize=(10, 16))
-  
-  # Plot positions
-  print("Start plotting")
-  axs[0].plot(times, filtered_positions[:, 0], label='X Position')
-  axs[0].plot(times, filtered_positions[:, 1], label='Y Position')
-  axs[0].plot(times, filtered_positions[:, 2], label='Z Position')
-  axs[0].set_xlabel('Time')
-  axs[0].set_ylabel('Position')
-  axs[0].legend()
-  axs[0].set_title('Position Over Time')
-  
-  # Plot velocity magnitudes
-  axs[1].plot(times, velocities_x, label='X Velocity')
-  axs[1].plot(times, velocities_y, label='Y Velocity')
-  axs[1].plot(times, velocities_z, label='Z Velocity')
-  axs[1].set_xlabel('Time')
-  axs[1].set_ylabel('Velocity')
-  axs[1].legend()
-  axs[1].set_title('Velocity Over Time')
+    # After processing all images, plot position and velocity over time
+    fig, axs = plt.subplots(4, 1, figsize=(10, 16))
+    
+    # Plot positions
+    print("Start plotting")
+    axs[0].plot(times_opti, filtered_positions_opti[:, 0], label='X Position')
+    axs[0].plot(times_opti, filtered_positions_opti[:, 1], label='Y Position')
+    axs[0].plot(times_opti, filtered_positions_opti[:, 2], label='Z Position')
+    axs[0].set_xlabel('Time')
+    axs[0].set_ylabel('Position')
+    axs[0].legend()
+    axs[0].set_title('Position Over Time')
+    
+    # Plot velocity magnitudes
+    axs[1].plot(times_opti, velocities_x_opti, label='X Velocity')
+    axs[1].plot(times_opti, velocities_y_opti, label='Y Velocity')
+    axs[1].plot(times_opti, velocities_z_opti, label='Z Velocity')
+    axs[1].set_xlabel('Time')
+    axs[1].set_ylabel('Velocity')
+    axs[1].legend()
+    axs[1].set_title('Velocity Over Time')
 
-  # Plot Euler angles
-  axs[2].plot(times, filtered_eulers[:, 0], label='Roll')
-  axs[2].plot(times, filtered_eulers[:, 1], label='Pitch')
-  axs[2].plot(times, filtered_eulers[:, 2], label='Yaw')
-  axs[2].set_xlabel('Time')
-  axs[2].set_ylabel('Angle (degrees)')
-  axs[2].legend()
-  axs[2].set_title('Euler Angles Over Time')
+    # Plot Euler angles
+    axs[2].plot(times_opti, filtered_eulers_opti[:, 0], label='Roll')
+    axs[2].plot(times_opti, filtered_eulers_opti[:, 1], label='Pitch')
+    axs[2].plot(times_opti, filtered_eulers_opti[:, 2], label='Yaw')
+    axs[2].set_xlabel('Time')
+    axs[2].set_ylabel('Angle (degrees)')
+    axs[2].legend()
+    axs[2].set_title('Euler Angles Over Time')
 
-  # Plot angular velocities
-  axs[3].plot(times, angular_velocities_x, label='Roll Velocity')
-  axs[3].plot(times, angular_velocities_y, label='Pitch Velocity')
-  axs[3].plot(times, angular_velocities_z, label='Yaw Velocity')
-  axs[3].set_xlabel('Time')
-  axs[3].set_ylabel('Angular Velocity (degrees/time)')
-  axs[3].legend()
-  axs[3].set_title('Angular Velocity Over Time')
+    # Plot angular velocities
+    axs[3].plot(times_opti, angular_velocities_x_opti, label='Roll Velocity')
+    axs[3].plot(times_opti, angular_velocities_y_opti, label='Pitch Velocity')
+    axs[3].plot(times_opti, angular_velocities_z_opti, label='Yaw Velocity')
+    axs[3].set_xlabel('Time')
+    axs[3].set_ylabel('Angular Velocity (degrees/time)')
+    axs[3].legend()
+    axs[3].set_title('Angular Velocity Over Time')
 
-  plt.tight_layout()
-  plt.show()
+    plt.tight_layout()
+    plt.show()
+
+  if cv_tracking:
+    # COMPUTER VISION TRACKING
+    K = np.loadtxt(f'{args.out_folder}/cam_K.txt').reshape(3,3)
+    color_files = sorted(glob.glob(f'{args.out_folder}/color/*'))
+    mesh = trimesh.load(f'{args.out_folder}/textured_mesh.obj')
+    to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
+    bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
+    out_dir = f'{args.out_folder}/pose_vis'
+    os.makedirs(out_dir, exist_ok=True)
+    logging.info(f"Saving to {out_dir}")
+
+    positions = []
+    eulers = []
+    times = []
+    for color_file in color_files:
+        #TODO changes next line to record timestamp correctly according file name
+        times.append(int(color_file))
+        color = imageio.imread(color_file)
+        pose = np.loadtxt(color_file.replace('.png','.txt').replace('color','ob_in_cam'))
+        pose = pose@np.linalg.inv(to_origin)
+        positions.append(pose[:3, 3])  # Assuming the last column is the translation vectorcolor = imageio.imread(color_file)
+        rotation = R.from_matrix(pose[:3, :3])
+        eulers.append(rotation.as_euler('xyz', degrees=True))
+        vis = draw_posed_3d_box(K, color, ob_in_cam=pose, bbox=bbox, line_color=(255,255,0))
+        id_str = os.path.basename(color_file).replace('.png','')
+        imageio.imwrite(f'{out_dir}/{id_str}.png', vis)
+
+    dt = (times_opti[-1]-times_opti[0]) * 10e-10 / len(times_opti)
+    fs = int(1/dt)  # Sample rate, Hz
+    cutoff = 25.0  # Desired cutoff frequency of the filter, Hz
+    order = 6  # Filter order
+    b, a = butter(order, cutoff, btype='low', analog=False, fs=fs)
+
+    # Filter the position data
+    positions = np.array(positions)
+    eulers = np.array(eulers)
+    # times = np.arange(0, len(positions) * 1/fs, 1/fs)
+    filtered_positions = np.zeros_like(positions)
+    for i in range(positions.shape[1]):
+        filtered_positions[:, i] = filtfilt(b, a, positions[:, i])
+
+    # Filter the Euler angle data
+    eulers = np.unwrap(eulers, 180, axis=0)
+    filtered_eulers = np.zeros_like(eulers)
+    for i in range(eulers.shape[1]):
+        filtered_eulers[:, i] = filtfilt(b, a, eulers[:, i])
+
+
+    # Compute derivatives
+    print(filtered_positions[:,0])
+    cs_positions_x = CubicSpline(times, filtered_positions[:,0])
+    cs_positions_y = CubicSpline(times, filtered_positions[:,1])
+    cs_positions_z = CubicSpline(times, filtered_positions[:,2])
+    cs_eulers_x = CubicSpline(times, filtered_eulers[:,0])
+    cs_eulers_y = CubicSpline(times, filtered_eulers[:,1])
+    cs_eulers_z = CubicSpline(times, filtered_eulers[:,2])
+
+
+    velocities_x = cs_positions_x(times, 1)
+    velocities_y = cs_positions_y(times, 1)
+    velocities_z = cs_positions_z(times, 1)
+    angular_velocities_x = cs_eulers_x(times, 1)
+    angular_velocities_y = cs_eulers_y(times, 1)
+    angular_velocities_z = cs_eulers_z(times, 1)
+
+    # After processing all images, plot position and velocity over time
+    fig, axs = plt.subplots(4, 1, figsize=(10, 16))
+    
+    # Plot positions
+    print("Start plotting")
+    axs[0].plot(times, filtered_positions[:, 0], label='X Position')
+    axs[0].plot(times, filtered_positions[:, 1], label='Y Position')
+    axs[0].plot(times, filtered_positions[:, 2], label='Z Position')
+    axs[0].set_xlabel('Time')
+    axs[0].set_ylabel('Position')
+    axs[0].legend()
+    axs[0].set_title('Position Over Time')
+    
+    # Plot velocity magnitudes
+    axs[1].plot(times, velocities_x, label='X Velocity')
+    axs[1].plot(times, velocities_y, label='Y Velocity')
+    axs[1].plot(times, velocities_z, label='Z Velocity')
+    axs[1].set_xlabel('Time')
+    axs[1].set_ylabel('Velocity')
+    axs[1].legend()
+    axs[1].set_title('Velocity Over Time')
+
+    # Plot Euler angles
+    axs[2].plot(times, filtered_eulers[:, 0], label='Roll')
+    axs[2].plot(times, filtered_eulers[:, 1], label='Pitch')
+    axs[2].plot(times, filtered_eulers[:, 2], label='Yaw')
+    axs[2].set_xlabel('Time')
+    axs[2].set_ylabel('Angle (degrees)')
+    axs[2].legend()
+    axs[2].set_title('Euler Angles Over Time')
+
+    # Plot angular velocities
+    axs[3].plot(times, angular_velocities_x, label='Roll Velocity')
+    axs[3].plot(times, angular_velocities_y, label='Pitch Velocity')
+    axs[3].plot(times, angular_velocities_z, label='Yaw Velocity')
+    axs[3].set_xlabel('Time')
+    axs[3].set_ylabel('Angular Velocity (degrees/time)')
+    axs[3].legend()
+    axs[3].set_title('Angular Velocity Over Time')
+
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__=="__main__":
@@ -330,6 +419,6 @@ if __name__=="__main__":
   elif args.mode=='global_refine':
     run_one_video_global_nerf(out_folder=args.out_folder)
   elif args.mode=='draw_pose':
-    draw_pose()
+    draw_pose(optitrack_tracking=True, cv_tracking=False)
   else:
     raise RuntimeError
